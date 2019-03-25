@@ -417,8 +417,11 @@ newSopOperator(OP_OperatorTable* table)
     /// @todo obsoleteAttrParms
 
 
-    hvdb::OpenVDBOpFactory("OpenVDB From Particles",
+    hvdb::OpenVDBOpFactory("VDB from Particles",
         SOP_OpenVDB_From_Particles::factory, parms, *table)
+#ifndef SESI_OPENVDB
+        .setInternalName("DW_OpenVDBFromParticles")
+#endif
         .addInput("Points to convert")
         .addOptionalInput("Optional reference VDB")
         .setObsoleteParms(obsoleteParms)
@@ -1119,7 +1122,8 @@ VDB_NODE_OR_CACHE(VDB_COMPILABLE_SOP, SOP_OpenVDB_From_Particles)::cookVDBSop(OP
             outputBoundingMaskGrid = (0 != evalInt("buildmask", 0, time)),
             outputAttributeGrid =
                 ((0 != evalInt("buildattrs", 0, time)) && (evalInt("attrList", 0, time) > 0)),
-            needLeveLSet = (outputLevelSetGrid || outputFogVolumeGrid || outputBoundingMaskGrid);
+            needLeveLSet = (outputLevelSetGrid || outputFogVolumeGrid || outputBoundingMaskGrid
+                || (outputAttributeGrid && !outputInteriorMaskGrid));
 
         if (!outputFogVolumeGrid && !outputLevelSetGrid
             && !outputAttributeGrid && !outputInteriorMaskGrid)
