@@ -1,32 +1,5 @@
-///////////////////////////////////////////////////////////////////////////
-//
-// Copyright (c) 2012-2018 DreamWorks Animation LLC
-//
-// All rights reserved. This software is distributed under the
-// Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )
-//
-// Redistributions of source code must retain the above copyright
-// and license notice and the following restrictions and disclaimer.
-//
-// *     Neither the name of DreamWorks Animation nor the names of
-// its contributors may be used to endorse or promote products derived
-// from this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-// IN NO EVENT SHALL THE COPYRIGHT HOLDERS' AND CONTRIBUTORS' AGGREGATE
-// LIABILITY FOR ALL CLAIMS REGARDLESS OF THEIR BASIS EXCEED US$250.00.
-//
-///////////////////////////////////////////////////////////////////////////
+// Copyright Contributors to the OpenVDB Project
+// SPDX-License-Identifier: MPL-2.0
 
 /// @author Dan Bailey, Nick Avramoussis
 ///
@@ -86,7 +59,7 @@ inline typename PointDataGridT::Ptr
 createPointDataGrid(const PointIndexGridT& pointIndexGrid,
                     const PositionArrayT& positions,
                     const math::Transform& xform,
-                    Metadata::Ptr positionDefaultValue = Metadata::Ptr());
+                    const Metadata* positionDefaultValue = nullptr);
 
 
 /// @brief  Convenience method to create a @c PointDataGrid from a std::vector of
@@ -103,7 +76,7 @@ template <typename CompressionT, typename PointDataGridT, typename ValueT>
 inline typename PointDataGridT::Ptr
 createPointDataGrid(const std::vector<ValueT>& positions,
                     const math::Transform& xform,
-                    Metadata::Ptr positionDefaultValue = Metadata::Ptr());
+                    const Metadata* positionDefaultValue = nullptr);
 
 
 /// @brief  Stores point attribute data in an existing @c PointDataGrid attribute.
@@ -640,8 +613,10 @@ private:
 
 template<typename CompressionT, typename PointDataGridT, typename PositionArrayT, typename PointIndexGridT>
 inline typename PointDataGridT::Ptr
-createPointDataGrid(const PointIndexGridT& pointIndexGrid, const PositionArrayT& positions,
-                    const math::Transform& xform, Metadata::Ptr positionDefaultValue)
+createPointDataGrid(const PointIndexGridT& pointIndexGrid,
+                    const PositionArrayT& positions,
+                    const math::Transform& xform,
+                    const Metadata* positionDefaultValue)
 {
     using PointDataTreeT        = typename PointDataGridT::TreeType;
     using LeafT                 = typename PointDataTree::LeafNodeType;
@@ -670,6 +645,10 @@ createPointDataGrid(const PointIndexGridT& pointIndexGrid, const PositionArrayT&
     const size_t positionIndex = descriptor->find("P");
     assert(positionIndex != AttributeSet::INVALID_POS);
 
+    // acquire registry lock to avoid locking when appending attributes in parallel
+
+    AttributeArray::ScopedRegistryLock lock;
+
     // populate position attribute
 
     LeafManagerT leafManager(*treePtr);
@@ -684,7 +663,7 @@ createPointDataGrid(const PointIndexGridT& pointIndexGrid, const PositionArrayT&
             // initialise the attribute storage
 
             Index pointCount(static_cast<Index>(pointIndexLeaf->indices().size()));
-            leaf.initializeAttributes(descriptor, pointCount);
+            leaf.initializeAttributes(descriptor, pointCount, &lock);
 
             // create write handle for position
 
@@ -741,12 +720,14 @@ template <typename CompressionT, typename PointDataGridT, typename ValueT>
 inline typename PointDataGridT::Ptr
 createPointDataGrid(const std::vector<ValueT>& positions,
                     const math::Transform& xform,
-                    Metadata::Ptr positionDefaultValue)
+                    const Metadata* positionDefaultValue)
 {
     const PointAttributeVector<ValueT> pointList(positions);
 
-    tools::PointIndexGrid::Ptr pointIndexGrid = tools::createPointIndexGrid<tools::PointIndexGrid>(pointList, xform);
-    return createPointDataGrid<CompressionT, PointDataGridT>(*pointIndexGrid, pointList, xform, positionDefaultValue);
+    tools::PointIndexGrid::Ptr pointIndexGrid =
+        tools::createPointIndexGrid<tools::PointIndexGrid>(pointList, xform);
+    return createPointDataGrid<CompressionT, PointDataGridT>(
+        *pointIndexGrid, pointList, xform, positionDefaultValue);
 }
 
 
@@ -1023,7 +1004,7 @@ computeVoxelSize(  const PositionWrapper& positions,
 
         previousVoxelCount = voxelCount;
         voxelCount = mask->activeVoxelCount();
-        volume = math::Pow3(voxelSize) * voxelCount;
+        volume = math::Pow3(voxelSize) * static_cast<float>(voxelCount);
 
         // stop if no change in the volume or the volume has increased
 
@@ -1058,65 +1039,36 @@ computeVoxelSize(  const PositionWrapper& positions,
 
 // deprecated functions
 
-
-template <typename PositionAttribute, typename PointDataGridT>
+template<
+    typename CompressionT,
+    typename PointDataGridT,
+    typename PositionArrayT,
+    typename PointIndexGridT>
 OPENVDB_DEPRECATED
-inline void
-convertPointDataGridPosition(   PositionAttribute& positionAttribute,
-                                const PointDataGridT& grid,
-                                const std::vector<Index64>& pointOffsets,
-                                const Index64 startOffset,
-                                const std::vector<Name>& includeGroups,
-                                const std::vector<Name>& excludeGroups,
-                                const bool inCoreOnly = false)
+inline typename PointDataGridT::Ptr
+createPointDataGrid(const PointIndexGridT& pointIndexGrid,
+                    const PositionArrayT& positions,
+                    const math::Transform& xform,
+                    Metadata::Ptr positionDefaultValue)
 {
-    auto leaf = grid.tree().cbeginLeaf();
-    if (!leaf)  return;
-    MultiGroupFilter filter(includeGroups, excludeGroups, leaf->attributeSet());
-    convertPointDataGridPosition(positionAttribute, grid, pointOffsets, startOffset,
-        filter, inCoreOnly);
+    return createPointDataGrid<CompressionT, PointDataGridT>(
+        pointIndexGrid, positions, xform, positionDefaultValue.get());
 }
 
 
-template <typename TypedAttribute, typename PointDataTreeT>
+template <typename CompressionT, typename PointDataGridT, typename ValueT>
 OPENVDB_DEPRECATED
-inline void
-convertPointDataGridAttribute(  TypedAttribute& attribute,
-                                const PointDataTreeT& tree,
-                                const std::vector<Index64>& pointOffsets,
-                                const Index64 startOffset,
-                                const unsigned arrayIndex,
-                                const Index stride,
-                                const std::vector<Name>& includeGroups,
-                                const std::vector<Name>& excludeGroups,
-                                const bool inCoreOnly = false)
+inline typename PointDataGridT::Ptr
+createPointDataGrid(const std::vector<ValueT>& positions,
+                    const math::Transform& xform,
+                    Metadata::Ptr positionDefaultValue)
 {
-    auto leaf = tree.cbeginLeaf();
-    if (!leaf)  return;
-    MultiGroupFilter filter(includeGroups, excludeGroups, leaf->attributeSet());
-    convertPointDataGridAttribute(attribute, tree, pointOffsets, startOffset,
-        arrayIndex, stride, filter, inCoreOnly);
+    return createPointDataGrid<CompressionT, PointDataGridT>(
+        positions, xform, positionDefaultValue.get());
 }
 
 
-template <typename Group, typename PointDataTreeT>
-OPENVDB_DEPRECATED
-inline void
-convertPointDataGridGroup(  Group& group,
-                            const PointDataTreeT& tree,
-                            const std::vector<Index64>& pointOffsets,
-                            const Index64 startOffset,
-                            const AttributeSet::Descriptor::GroupIndex index,
-                            const std::vector<Name>& includeGroups,
-                            const std::vector<Name>& excludeGroups,
-                            const bool inCoreOnly = false)
-{
-    auto leaf = tree.cbeginLeaf();
-    if (!leaf)  return;
-    MultiGroupFilter filter(includeGroups, excludeGroups, leaf->attributeSet());
-    convertPointDataGridGroup(group, tree, pointOffsets, startOffset,
-        index, filter, inCoreOnly);
-}
+////////////////////////////////////////
 
 
 } // namespace points
@@ -1124,7 +1076,3 @@ convertPointDataGridGroup(  Group& group,
 } // namespace openvdb
 
 #endif // OPENVDB_POINTS_POINT_CONVERSION_HAS_BEEN_INCLUDED
-
-// Copyright (c) 2012-2018 DreamWorks Animation LLC
-// All rights reserved. This software is distributed under the
-// Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )

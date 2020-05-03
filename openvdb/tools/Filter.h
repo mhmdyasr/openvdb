@@ -1,32 +1,5 @@
-///////////////////////////////////////////////////////////////////////////
-//
-// Copyright (c) 2012-2019 DreamWorks Animation LLC
-//
-// All rights reserved. This software is distributed under the
-// Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )
-//
-// Redistributions of source code must retain the above copyright
-// and license notice and the following restrictions and disclaimer.
-//
-// *     Neither the name of DreamWorks Animation nor the names of
-// its contributors may be used to endorse or promote products derived
-// from this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-// IN NO EVENT SHALL THE COPYRIGHT HOLDERS' AND CONTRIBUTORS' AGGREGATE
-// LIABILITY FOR ALL CLAIMS REGARDLESS OF THEIR BASIS EXCEED US$250.00.
-//
-///////////////////////////////////////////////////////////////////////////
+// Copyright Contributors to the OpenVDB Project
+// SPDX-License-Identifier: MPL-2.0
 //
 /// @author Ken Museth
 ///
@@ -202,8 +175,8 @@ private:
     template <typename AvgT>
     void doBox( const RangeType& r, Int32 w);
     void doBoxX(const RangeType& r, Int32 w) { this->doBox<Avg<0> >(r,w); }
-    void doBoxZ(const RangeType& r, Int32 w) { this->doBox<Avg<1> >(r,w); }
-    void doBoxY(const RangeType& r, Int32 w) { this->doBox<Avg<2> >(r,w); }
+    void doBoxY(const RangeType& r, Int32 w) { this->doBox<Avg<1> >(r,w); }
+    void doBoxZ(const RangeType& r, Int32 w) { this->doBox<Avg<2> >(r,w); }
     void doMedian(const RangeType&, int);
     void doOffset(const RangeType&, ValueType);
     /// @return true if the process was interrupted
@@ -238,7 +211,10 @@ Filter<GridT, MaskT, InterruptT>::Avg<Axis>::operator()(Coord xyz)
     ValueType sum = zeroVal<ValueType>();
     Int32 &i = xyz[Axis], j = i + width;
     for (i -= width; i <= j; ++i) filter_internal::accum(sum, acc.getValue(xyz));
-    return static_cast<ValueType>(sum * frac);
+    OPENVDB_NO_TYPE_CONVERSION_WARNING_BEGIN
+    ValueType value = static_cast<ValueType>(sum * frac);
+    OPENVDB_NO_TYPE_CONVERSION_WARNING_END
+    return value;
 }
 
 
@@ -261,10 +237,13 @@ Filter<GridT, MaskT, InterruptT>::mean(int width, int iterations, const MaskType
         mTask = std::bind(&Filter::doBoxX, std::placeholders::_1, std::placeholders::_2, w);
         this->cook(leafs);
 
-        mTask = std::bind(&Filter::doBoxY, std::placeholders::_1, std::placeholders::_2, w);
-        this->cook(leafs);
+        // note that the order of the YZ passes are flipped to maintain backwards-compatibility
+        // with an indexing typo in the original logic
 
         mTask = std::bind(&Filter::doBoxZ, std::placeholders::_1, std::placeholders::_2, w);
+        this->cook(leafs);
+
+        mTask = std::bind(&Filter::doBoxY, std::placeholders::_1, std::placeholders::_2, w);
         this->cook(leafs);
     }
 
@@ -289,10 +268,13 @@ Filter<GridT, MaskT, InterruptT>::gaussian(int width, int iterations, const Mask
             mTask = std::bind(&Filter::doBoxX, std::placeholders::_1, std::placeholders::_2, w);
             this->cook(leafs);
 
-            mTask = std::bind(&Filter::doBoxY, std::placeholders::_1, std::placeholders::_2, w);
-            this->cook(leafs);
+            // note that the order of the YZ passes are flipped to maintain backwards-compatibility
+            // with an indexing typo in the original logic
 
             mTask = std::bind(&Filter::doBoxZ, std::placeholders::_1, std::placeholders::_2, w);
+            this->cook(leafs);
+
+            mTask = std::bind(&Filter::doBoxY, std::placeholders::_1, std::placeholders::_2, w);
             this->cook(leafs);
         }
     }
@@ -370,7 +352,10 @@ Filter<GridT, MaskT, InterruptT>::doBox(const RangeType& range, Int32 w)
             for (VoxelCIterT iter = leafIter->cbeginValueOn(); iter; ++iter) {
                 const Coord xyz = iter.getCoord();
                 if (alpha(xyz, a, b)) {
-                    buffer.setValue(iter.pos(), ValueType(b*(*iter) + a*avg(xyz)));
+                    OPENVDB_NO_TYPE_CONVERSION_WARNING_BEGIN
+                    const ValueType value(b*(*iter) + a*avg(xyz));
+                    OPENVDB_NO_TYPE_CONVERSION_WARNING_END
+                    buffer.setValue(iter.pos(), value);
                 }
             }
         }
@@ -400,7 +385,10 @@ Filter<GridT, MaskT, InterruptT>::doMedian(const RangeType& range, int width)
             for (VoxelCIterT iter = leafIter->cbeginValueOn(); iter; ++iter) {
                 if (alpha(iter.getCoord(), a, b)) {
                     stencil.moveTo(iter);
-                    buffer.setValue(iter.pos(), ValueType(b*(*iter) + a*stencil.median()));
+                    OPENVDB_NO_TYPE_CONVERSION_WARNING_BEGIN
+                    ValueType value(b*(*iter) + a*stencil.median());
+                    OPENVDB_NO_TYPE_CONVERSION_WARNING_END
+                    buffer.setValue(iter.pos(), value);
                 }
             }
         }
@@ -427,7 +415,12 @@ Filter<GridT, MaskT, InterruptT>::doOffset(const RangeType& range, ValueType off
         AlphaMaskT alpha(*mGrid, *mMask, mMinMask, mMaxMask, mInvertMask);
         for (LeafIterT leafIter=range.begin(); leafIter; ++leafIter) {
             for (VoxelIterT iter = leafIter->beginValueOn(); iter; ++iter) {
-                if (alpha(iter.getCoord(), a, b)) iter.setValue(ValueType(*iter + a*offset));
+                if (alpha(iter.getCoord(), a, b)) {
+                    OPENVDB_NO_TYPE_CONVERSION_WARNING_BEGIN
+                    ValueType value(*iter + a*offset);
+                    OPENVDB_NO_TYPE_CONVERSION_WARNING_END
+                    iter.setValue(value);
+                }
             }
         }
     } else {
@@ -456,7 +449,3 @@ Filter<GridT, MaskT, InterruptT>::wasInterrupted()
 } // namespace openvdb
 
 #endif // OPENVDB_TOOLS_FILTER_HAS_BEEN_INCLUDED
-
-// Copyright (c) 2012-2019 DreamWorks Animation LLC
-// All rights reserved. This software is distributed under the
-// Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )

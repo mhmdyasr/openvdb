@@ -1,36 +1,8 @@
-///////////////////////////////////////////////////////////////////////////
-//
-// Copyright (c) 2012-2019 DreamWorks Animation LLC
-//
-// All rights reserved. This software is distributed under the
-// Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )
-//
-// Redistributions of source code must retain the above copyright
-// and license notice and the following restrictions and disclaimer.
-//
-// *     Neither the name of DreamWorks Animation nor the names of
-// its contributors may be used to endorse or promote products derived
-// from this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-// IN NO EVENT SHALL THE COPYRIGHT HOLDERS' AND CONTRIBUTORS' AGGREGATE
-// LIABILITY FOR ALL CLAIMS REGARDLESS OF THEIR BASIS EXCEED US$250.00.
-//
-///////////////////////////////////////////////////////////////////////////
+// Copyright Contributors to the OpenVDB Project
+// SPDX-License-Identifier: MPL-2.0
 
 #include <cppunit/extensions/HelperMacros.h>
 
-#include <tbb/tbb_thread.h>
 #include <tbb/task_scheduler_init.h>
 #include <tbb/enumerable_thread_specific.h>
 #include <tbb/parallel_for.h>
@@ -41,6 +13,7 @@
 #include <openvdb/util/PagedArray.h>
 #include <openvdb/util/Formats.h>
 
+#include <chrono>
 #include <iostream>
 
 //#define BENCHMARK_PAGED_ARRAY
@@ -59,11 +32,13 @@ public:
     CPPUNIT_TEST(testFormats);
     CPPUNIT_TEST(testCpuTimer);
     CPPUNIT_TEST(testPagedArray);
+    CPPUNIT_TEST(testPagedArrayPushBack);
     CPPUNIT_TEST_SUITE_END();
 
     void testCpuTimer();
     void testFormats();
     void testPagedArray();
+    void testPagedArrayPushBack();
 
     using RangeT = tbb::blocked_range<size_t>;
 
@@ -161,28 +136,90 @@ TestUtil::testFormats()
 void
 TestUtil::testCpuTimer()
 {
-    const int expected = 159, tolerance = 20;//milliseconds
-    const tbb::tick_count::interval_t sec(expected/1000.0);
+    // std::this_thread::sleep_for() only guarantees that the time slept is no less
+    // than the requested time, which can be inaccurate, particularly on Windows,
+    // so use this more accurate, but non-asynchronous implementation for unit testing
+    auto sleep_for = [&](int ms) -> void
     {
-      openvdb::util::CpuTimer timer;
-      tbb::this_tbb_thread::sleep(sec);
-      const int actual1 = static_cast<int>(timer.milliseconds());
-      CPPUNIT_ASSERT_DOUBLES_EQUAL(expected, actual1, tolerance);
-      tbb::this_tbb_thread::sleep(sec);
-      const int actual2 = static_cast<int>(timer.milliseconds());
-      CPPUNIT_ASSERT_DOUBLES_EQUAL(2*expected, actual2, tolerance);
+        auto start = std::chrono::high_resolution_clock::now();
+        while (true) {
+            auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::high_resolution_clock::now() - start);
+            if (duration.count() > ms)    return;
+        }
+    };
+
+    const int expected = 159, tolerance = 20;//milliseconds
+    {
+        openvdb::util::CpuTimer timer;
+        sleep_for(expected);
+        const int actual1 = static_cast<int>(timer.milliseconds());
+        CPPUNIT_ASSERT_DOUBLES_EQUAL(expected, actual1, tolerance);
+        sleep_for(expected);
+        const int actual2 = static_cast<int>(timer.milliseconds());
+        CPPUNIT_ASSERT_DOUBLES_EQUAL(2*expected, actual2, tolerance);
     }
     {
-      openvdb::util::CpuTimer timer;
-      tbb::this_tbb_thread::sleep(sec);
-      auto t1 = timer.restart();
-      tbb::this_tbb_thread::sleep(sec);
-      tbb::this_tbb_thread::sleep(sec);
-      auto t2 = timer.restart();
-      CPPUNIT_ASSERT_DOUBLES_EQUAL(2*t1, t2, tolerance);
+        openvdb::util::CpuTimer timer;
+        sleep_for(expected);
+        auto t1 = timer.restart();
+        sleep_for(expected);
+        sleep_for(expected);
+        auto t2 = timer.restart();
+        CPPUNIT_ASSERT_DOUBLES_EQUAL(2*t1, t2, tolerance);
     }
 }
 
+void
+TestUtil::testPagedArrayPushBack()
+{
+#ifdef BENCHMARK_PAGED_ARRAY
+    const size_t problemSize = 256000;
+    openvdb::util::CpuTimer timer;
+    std::cerr << "\nProblem size for benchmark: " << problemSize << std::endl;
+#else
+    const size_t problemSize = 256000;
+#endif
+    {//parallel PagedArray::push_back
+        using ArrayT = openvdb::util::PagedArray<size_t>;
+        ArrayT d;
+#ifdef BENCHMARK_PAGED_ARRAY
+        timer.start("3: Parallel PagedArray::push_back with default page size");
+#endif
+        {// for some reason this:
+            ArrayPushBack<ArrayT> tmp(d);
+            tmp.parallel(problemSize);
+        }// is faster than:
+        //tbb::parallel_for(tbb::blocked_range<size_t>(0, problemSize, d.pageSize()),
+        //                  [&d](const tbb::blocked_range<size_t> &range){
+        //                  for (size_t i=range.begin(); i!=range.end(); ++i) d.push_back(i);});
+#ifdef BENCHMARK_PAGED_ARRAY
+        timer.stop();
+#endif
+        CPPUNIT_ASSERT_EQUAL(size_t(10), d.log2PageSize());
+        CPPUNIT_ASSERT_EQUAL(size_t(1)<<d.log2PageSize(), d.pageSize());
+        CPPUNIT_ASSERT_EQUAL(problemSize, d.size());
+        // pageCount - 1 = max index >> log2PageSize
+        CPPUNIT_ASSERT_EQUAL((d.size()-1)>>d.log2PageSize(), d.pageCount()-1);
+        CPPUNIT_ASSERT_EQUAL(d.pageCount()*d.pageSize(), d.capacity());
+
+#ifdef BENCHMARK_PAGED_ARRAY
+        timer.start("parallel sort with a default page size");
+#endif
+        d.sort();
+#ifdef BENCHMARK_PAGED_ARRAY
+        timer.stop();
+#endif
+        for (size_t i=0, n=d.size(); i<n; ++i) CPPUNIT_ASSERT_EQUAL(i, d[i]);
+
+        CPPUNIT_ASSERT_EQUAL(problemSize, d.push_back(1));
+        CPPUNIT_ASSERT_EQUAL(problemSize+1, d.size());
+        CPPUNIT_ASSERT_EQUAL(size_t(1)<<d.log2PageSize(), d.pageSize());
+        // pageCount - 1 = max index >> log2PageSize
+        CPPUNIT_ASSERT_EQUAL((d.size()-1)>>d.log2PageSize(), d.pageCount()-1);
+        CPPUNIT_ASSERT_EQUAL(d.pageCount()*d.pageSize(), d.capacity());
+    }
+}
 
 void
 TestUtil::testPagedArray()
@@ -647,7 +684,3 @@ TestUtil::testPagedArray()
         }
     }
 }
-
-// Copyright (c) 2012-2019 DreamWorks Animation LLC
-// All rights reserved. This software is distributed under the
-// Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )

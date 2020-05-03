@@ -1,32 +1,5 @@
-///////////////////////////////////////////////////////////////////////////
-//
-// Copyright (c) 2012-2019 DreamWorks Animation LLC
-//
-// All rights reserved. This software is distributed under the
-// Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )
-//
-// Redistributions of source code must retain the above copyright
-// and license notice and the following restrictions and disclaimer.
-//
-// *     Neither the name of DreamWorks Animation nor the names of
-// its contributors may be used to endorse or promote products derived
-// from this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-// IN NO EVENT SHALL THE COPYRIGHT HOLDERS' AND CONTRIBUTORS' AGGREGATE
-// LIABILITY FOR ALL CLAIMS REGARDLESS OF THEIR BASIS EXCEED US$250.00.
-//
-///////////////////////////////////////////////////////////////////////////
+// Copyright Contributors to the OpenVDB Project
+// SPDX-License-Identifier: MPL-2.0
 
 #include <unordered_map>
 #include <cppunit/extensions/HelperMacros.h>
@@ -184,13 +157,18 @@ TestCoord::testCoordBBox()
         CPPUNIT_ASSERT_EQUAL(openvdb::Coord::min(), b.min());
         CPPUNIT_ASSERT_EQUAL(openvdb::Coord::max(), b.max());
     }
-    {// empty, hasVolume and volume
+    {// empty, dim, hasVolume and volume
         const openvdb::Coord c(1,2,3);
-        const openvdb::CoordBBox a(c, c), b(c, c.offsetBy(0,-1,0));
-        CPPUNIT_ASSERT( a.hasVolume() && !a.empty());
-        CPPUNIT_ASSERT(!b.hasVolume() &&  b.empty());
-        CPPUNIT_ASSERT_EQUAL(uint64_t(1), a.volume());
-        CPPUNIT_ASSERT_EQUAL(uint64_t(0), b.volume());
+        const openvdb::CoordBBox b0(c, c), b1(c, c.offsetBy(0,-1,0)), b2;
+        CPPUNIT_ASSERT( b0.hasVolume() && !b0.empty());
+        CPPUNIT_ASSERT(!b1.hasVolume() &&  b1.empty());
+        CPPUNIT_ASSERT(!b2.hasVolume() &&  b2.empty());
+        CPPUNIT_ASSERT_EQUAL(openvdb::Coord(1), b0.dim());
+        CPPUNIT_ASSERT_EQUAL(openvdb::Coord(0), b1.dim());
+        CPPUNIT_ASSERT_EQUAL(openvdb::Coord(0), b2.dim());
+        CPPUNIT_ASSERT_EQUAL(uint64_t(1), b0.volume());
+        CPPUNIT_ASSERT_EQUAL(uint64_t(0), b1.volume());
+        CPPUNIT_ASSERT_EQUAL(uint64_t(0), b2.volume());
     }
     {// volume and split constructor
         const openvdb::Coord min(-1,-2,30), max(20,30,55);
@@ -416,7 +394,3 @@ TestCoord::testCoordHash()
       CPPUNIT_ASSERT(h.load_factor() <= 1.0f);// no hask key collisions!
     }
 }
-
-// Copyright (c) 2012-2019 DreamWorks Animation LLC
-// All rights reserved. This software is distributed under the
-// Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )

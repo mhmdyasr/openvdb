@@ -1,32 +1,5 @@
-///////////////////////////////////////////////////////////////////////////
-//
-// Copyright (c) 2012-2018 DreamWorks Animation LLC
-//
-// All rights reserved. This software is distributed under the
-// Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )
-//
-// Redistributions of source code must retain the above copyright
-// and license notice and the following restrictions and disclaimer.
-//
-// *     Neither the name of DreamWorks Animation nor the names of
-// its contributors may be used to endorse or promote products derived
-// from this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-// IN NO EVENT SHALL THE COPYRIGHT HOLDERS' AND CONTRIBUTORS' AGGREGATE
-// LIABILITY FOR ALL CLAIMS REGARDLESS OF THEIR BASIS EXCEED US$250.00.
-//
-///////////////////////////////////////////////////////////////////////////
+// Copyright Contributors to the OpenVDB Project
+// SPDX-License-Identifier: MPL-2.0
 
 #include <cppunit/extensions/HelperMacros.h>
 #include <openvdb/openvdb.h>
@@ -53,6 +26,7 @@ public:
     CPPUNIT_TEST(testTransformVec3SPoint);
     CPPUNIT_TEST(testTransformVec3DBox);
     CPPUNIT_TEST(testResampleToMatch);
+    CPPUNIT_TEST(testDecomposition);
     CPPUNIT_TEST_SUITE_END();
 
     void testTransformBoolPoint()
@@ -75,6 +49,7 @@ public:
         { transformGrid<openvdb::Vec3DGrid, openvdb::tools::BoxSampler>(); }
 
     void testResampleToMatch();
+    void testDecomposition();
 
 private:
     template<typename GridType, typename Sampler> void transformGrid();
@@ -265,6 +240,71 @@ TestGridTransformer::testResampleToMatch()
     }
 }
 
-// Copyright (c) 2012-2018 DreamWorks Animation LLC
-// All rights reserved. This software is distributed under the
-// Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )
+
+////////////////////////////////////////
+
+
+void
+TestGridTransformer::testDecomposition()
+{
+    using namespace openvdb;
+    using tools::local_util::decompose;
+
+    {
+        Vec3d s, r, t;
+        auto m = Mat4d::identity();
+        CPPUNIT_ASSERT(decompose(m, s, r, t));
+        m(1, 3) = 1.0; // add a perspective component
+        // Verify that decomposition fails for perspective transforms.
+        CPPUNIT_ASSERT(!decompose(m, s, r, t));
+    }
+
+    const auto rad = [](double deg) { return deg * M_PI / 180.0; };
+
+    const Vec3d ix(1, 0, 0), iy(0, 1, 0), iz(0, 0, 1);
+
+    const auto translation = { Vec3d(0), Vec3d(100, 0, -100), Vec3d(-50, 100, 250) };
+    const auto scale = { 1.0, 0.25, -0.25, -1.0, 10.0, -10.0 };
+    const auto angle = { rad(0.0), rad(45.0), rad(90.0), rad(180.0),
+        rad(225.0), rad(270.0), rad(315.0), rad(360.0) };
+
+    for (const auto& t: translation) {
+
+        for (const double sx: scale) {
+            for (const double sy: scale) {
+                for (const double sz: scale) {
+                    const Vec3d s(sx, sy, sz);
+
+                    for (const double rx: angle) {
+                        for (const double ry: angle) {
+                            for (const double rz: angle) {
+
+                                Mat4d m =
+                                    math::rotation<Mat4d>(iz, rz) *
+                                    math::rotation<Mat4d>(iy, ry) *
+                                    math::rotation<Mat4d>(ix, rx) *
+                                    math::scale<Mat4d>(s);
+                                m.setTranslation(t);
+
+                                Vec3d outS(0), outR(0), outT(0);
+                                if (decompose(m, outS, outR, outT)) {
+                                    // If decomposition succeeds, verify that it produces
+                                    // the same matrix.  (Most decompositions fail to find
+                                    // a unique solution, though.)
+                                    Mat4d outM =
+                                        math::rotation<Mat4d>(iz, outR.z()) *
+                                        math::rotation<Mat4d>(iy, outR.y()) *
+                                        math::rotation<Mat4d>(ix, outR.x()) *
+                                        math::scale<Mat4d>(outS);
+                                    outM.setTranslation(outT);
+                                    CPPUNIT_ASSERT(outM.eq(m));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+

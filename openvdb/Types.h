@@ -1,32 +1,5 @@
-///////////////////////////////////////////////////////////////////////////
-//
-// Copyright (c) 2012-2019 DreamWorks Animation LLC
-//
-// All rights reserved. This software is distributed under the
-// Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )
-//
-// Redistributions of source code must retain the above copyright
-// and license notice and the following restrictions and disclaimer.
-//
-// *     Neither the name of DreamWorks Animation nor the names of
-// its contributors may be used to endorse or promote products derived
-// from this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-// IN NO EVENT SHALL THE COPYRIGHT HOLDERS' AND CONTRIBUTORS' AGGREGATE
-// LIABILITY FOR ALL CLAIMS REGARDLESS OF THEIR BASIS EXCEED US$250.00.
-//
-///////////////////////////////////////////////////////////////////////////
+// Copyright Contributors to the OpenVDB Project
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef OPENVDB_TYPES_HAS_BEEN_INCLUDED
 #define OPENVDB_TYPES_HAS_BEEN_INCLUDED
@@ -43,12 +16,9 @@
 #include <openvdb/math/Mat3.h>
 #include <openvdb/math/Mat4.h>
 #include <openvdb/math/Coord.h>
+#include <cstdint>
 #include <memory>
 #include <type_traits>
-#if OPENVDB_ABI_VERSION_NUMBER <= 3
-#include <boost/shared_ptr.hpp>
-#include <boost/weak_ptr.hpp>
-#endif
 
 
 namespace openvdb {
@@ -117,24 +87,6 @@ using math::Quatd;
 // Dummy type for a voxel with a binary mask value, e.g. the active state
 class ValueMask {};
 
-
-#if OPENVDB_ABI_VERSION_NUMBER <= 3
-
-// Use Boost shared pointers in OpenVDB 3 ABI compatibility mode.
-template<typename T> using SharedPtr = boost::shared_ptr<T>;
-template<typename T> using WeakPtr = boost::weak_ptr<T>;
-
-template<typename T, typename U> inline SharedPtr<T>
-ConstPtrCast(const SharedPtr<U>& ptr) { return boost::const_pointer_cast<T, U>(ptr); }
-
-template<typename T, typename U> inline SharedPtr<T>
-DynamicPtrCast(const SharedPtr<U>& ptr) { return boost::dynamic_pointer_cast<T, U>(ptr); }
-
-template<typename T, typename U> inline SharedPtr<T>
-StaticPtrCast(const SharedPtr<U>& ptr) { return boost::static_pointer_cast<T, U>(ptr); }
-
-#else // if OPENVDB_ABI_VERSION_NUMBER > 3
-
 // Use STL shared pointers from OpenVDB 4 on.
 template<typename T> using SharedPtr = std::shared_ptr<T>;
 template<typename T> using WeakPtr = std::weak_ptr<T>;
@@ -169,8 +121,6 @@ DynamicPtrCast(const SharedPtr<U>& ptr) { return std::dynamic_pointer_cast<T, U>
 /// @endcode
 template<typename T, typename U> inline SharedPtr<T>
 StaticPtrCast(const SharedPtr<U>& ptr) { return std::static_pointer_cast<T, U>(ptr); }
-
-#endif
 
 
 ////////////////////////////////////////
@@ -216,10 +166,10 @@ using PointDataIndex64 = PointIndex<Index64, 1>;
 /// parameter is a specialization of the class template given in the second
 /// template parameter
 template <typename T, template <typename...> class Template>
-struct IsSpecializationOf : std::false_type {};
+struct IsSpecializationOf: public std::false_type {};
 
 template <typename... Args, template <typename...> class Template>
-struct IsSpecializationOf<Template<Args...>, Template> : std::true_type {};
+struct IsSpecializationOf<Template<Args...>, Template>: public std::true_type {};
 
 
 ////////////////////////////////////////
@@ -723,24 +673,6 @@ struct SwappedCombineOp
 ////////////////////////////////////////
 
 
-#if OPENVDB_ABI_VERSION_NUMBER <= 3
-/// In copy constructors, members stored as shared pointers can be handled
-/// in several ways:
-/// <dl>
-/// <dt><b>CP_NEW</b>
-/// <dd>Don't copy the member; default construct a new member object instead.
-///
-/// <dt><b>CP_SHARE</b>
-/// <dd>Copy the shared pointer, so that the original and new objects share
-///     the same member.
-///
-/// <dt><b>CP_COPY</b>
-/// <dd>Create a deep copy of the member.
-/// </dl>
-enum CopyPolicy { CP_NEW, CP_SHARE, CP_COPY };
-#endif
-
-
 /// @brief Tag dispatch class that distinguishes shallow copy constructors
 /// from deep copy constructors
 class ShallowCopy {};
@@ -805,7 +737,3 @@ class PartialCreate {};
 #endif // defined(__ICC)
 
 #endif // OPENVDB_TYPES_HAS_BEEN_INCLUDED
-
-// Copyright (c) 2012-2019 DreamWorks Animation LLC
-// All rights reserved. This software is distributed under the
-// Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )

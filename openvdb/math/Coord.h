@@ -1,32 +1,5 @@
-///////////////////////////////////////////////////////////////////////////
-//
-// Copyright (c) 2012-2019 DreamWorks Animation LLC
-//
-// All rights reserved. This software is distributed under the
-// Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )
-//
-// Redistributions of source code must retain the above copyright
-// and license notice and the following restrictions and disclaimer.
-//
-// *     Neither the name of DreamWorks Animation nor the names of
-// its contributors may be used to endorse or promote products derived
-// from this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-// IN NO EVENT SHALL THE COPYRIGHT HOLDERS' AND CONTRIBUTORS' AGGREGATE
-// LIABILITY FOR ALL CLAIMS REGARDLESS OF THEIR BASIS EXCEED US$250.00.
-//
-///////////////////////////////////////////////////////////////////////////
+// Copyright Contributors to the OpenVDB Project
+// SPDX-License-Identifier: MPL-2.0
 
 #ifndef OPENVDB_MATH_COORD_HAS_BEEN_INCLUDED
 #define OPENVDB_MATH_COORD_HAS_BEEN_INCLUDED
@@ -235,7 +208,7 @@ public:
     /// corresponding components of @a b.
     static inline bool lessThan(const Coord& a, const Coord& b)
     {
-            return (a[0] < b[0] || a[1] < b[1] || a[2] < b[2]);
+        return (a[0] < b[0] || a[1] < b[1] || a[2] < b[2]);
     }
 
     /// @brief Return the index (0, 1 or 2) with the smallest value.
@@ -252,9 +225,13 @@ public:
 
     /// @brief Return a hash value for this coordinate
     /// @note Log2N is the binary logarithm of the hash table size.
-    /// @details The hash function is taken from the SIGGRAPh paper: "VDB: High-resolution sparse volumes with dynamic topology"
-    template <int Log2N = 20>
-    inline size_t hash() const { return ( (1<<Log2N)-1 ) & (mVec[0]*73856093 ^ mVec[1]*19349663 ^ mVec[2]*83492791); }
+    /// @details The hash function is taken from the SIGGRAPH paper:
+    /// "VDB: High-resolution sparse volumes with dynamic topology"
+    template<int Log2N = 20>
+    size_t hash() const
+    {
+        return ((1<<Log2N)-1) & (mVec[0]*73856093 ^ mVec[1]*19349663 ^ mVec[2]*83492791);
+    }
 
 private:
     std::array<Int32, 3> mVec;
@@ -376,10 +353,22 @@ public:
     bool operator!=(const CoordBBox& rhs) const { return !(*this == rhs); }
 
     /// @brief Return @c true if this bounding box is empty (i.e., encloses no coordinates).
-    bool empty() const { return (mMin[0] > mMax[0] || mMin[1] > mMax[1] || mMin[2] > mMax[2]); }
-    /// @brief Return @c true if this bounding box is nonempty (i.e., encloses at least one coordinate).
+    bool empty() const
+    {
+#if defined(__GNUC__) && !defined(__INTEL_COMPILER)
+  #pragma GCC diagnostic push
+  #pragma GCC diagnostic ignored "-Wstrict-overflow"
+#endif
+        return (mMin[0] > mMax[0] || mMin[1] > mMax[1] || mMin[2] > mMax[2]);
+#if defined(__GNUC__) && !defined(__INTEL_COMPILER)
+  #pragma GCC diagnostic pop
+#endif
+    }
+    /// @brief Return @c true if this bounding box is nonempty
+    /// (i.e., encloses at least one coordinate).
     operator bool() const { return !this->empty(); }
-    /// @brief Return @c true if this bounding box is nonempty (i.e., encloses at least one coordinate).
+    /// @brief Return @c true if this bounding box is nonempty
+    /// (i.e., encloses at least one coordinate).
     bool hasVolume() const { return !this->empty(); }
 
     /// @brief Return the floating-point position of the center of this bounding box.
@@ -388,7 +377,7 @@ public:
     /// @brief Return the dimensions of the coordinates spanned by this bounding box.
     /// @note Since coordinates are inclusive, a bounding box with min = max
     /// has dimensions of (1, 1, 1).
-    Coord dim() const { return mMax.offsetBy(1) - mMin; }
+    Coord dim() const { return empty() ? Coord(0) : (mMax.offsetBy(1) - mMin); }
     /// @todo deprecate - use dim instead
     Coord extents() const { return this->dim(); }
     /// @brief Return the integer volume of coordinates spanned by this bounding box.
@@ -609,7 +598,3 @@ struct hash<openvdb::math::Coord>
 }// namespace std
 
 #endif // OPENVDB_MATH_COORD_HAS_BEEN_INCLUDED
-
-// Copyright (c) 2012-2019 DreamWorks Animation LLC
-// All rights reserved. This software is distributed under the
-// Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )

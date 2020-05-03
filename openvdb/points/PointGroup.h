@@ -1,32 +1,5 @@
-///////////////////////////////////////////////////////////////////////////
-//
-// Copyright (c) 2012-2018 DreamWorks Animation LLC
-//
-// All rights reserved. This software is distributed under the
-// Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )
-//
-// Redistributions of source code must retain the above copyright
-// and license notice and the following restrictions and disclaimer.
-//
-// *     Neither the name of DreamWorks Animation nor the names of
-// its contributors may be used to endorse or promote products derived
-// from this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-// IN NO EVENT SHALL THE COPYRIGHT HOLDERS' AND CONTRIBUTORS' AGGREGATE
-// LIABILITY FOR ALL CLAIMS REGARDLESS OF THEIR BASIS EXCEED US$250.00.
-//
-///////////////////////////////////////////////////////////////////////////
+// Copyright Contributors to the OpenVDB Project
+// SPDX-License-Identifier: MPL-2.0
 
 /// @author Dan Bailey
 ///
@@ -321,118 +294,6 @@ struct SetGroupByFilterOp
 ////////////////////////////////////////
 
 
-/// Convenience class with methods for analyzing group data
-class GroupInfo
-{
-public:
-    using Descriptor = AttributeSet::Descriptor;
-
-    GroupInfo(const AttributeSet& attributeSet)
-        : mAttributeSet(attributeSet) { }
-
-    /// Return the number of bits in a group (typically 8)
-    static size_t groupBits() { return sizeof(GroupType) * CHAR_BIT; }
-
-    /// Return the number of empty group slots which correlates to the number of groups
-    /// that can be stored without increasing the number of group attribute arrays
-    size_t unusedGroups() const
-    {
-        const Descriptor& descriptor = mAttributeSet.descriptor();
-
-        // compute total slots (one slot per bit of the group attributes)
-
-        const size_t groupAttributes = descriptor.count(GroupAttributeArray::attributeType());
-
-        if (groupAttributes == 0)   return 0;
-
-        const size_t totalSlots = groupAttributes * this->groupBits();
-
-        // compute slots in use
-
-        const AttributeSet::Descriptor::NameToPosMap& groupMap = mAttributeSet.descriptor().groupMap();
-        const size_t usedSlots = groupMap.size();
-
-        return totalSlots - usedSlots;
-    }
-
-    /// Return @c true if there are sufficient empty slots to allow compacting
-    bool canCompactGroups() const
-    {
-        // can compact if more unused groups than in one group attribute array
-
-        return this->unusedGroups() >= this->groupBits();
-    }
-
-    /// Return the next empty group slot
-    size_t nextUnusedOffset() const
-    {
-        const Descriptor::NameToPosMap& groupMap = mAttributeSet.descriptor().groupMap();
-
-        // build a list of group indices
-
-        std::vector<size_t> indices;
-        indices.reserve(groupMap.size());
-        for (const auto& namePos : groupMap) {
-            indices.push_back(namePos.second);
-        }
-
-        std::sort(indices.begin(), indices.end());
-
-        // return first index not present
-
-        size_t offset = 0;
-        for (const size_t& index : indices) {
-            if (index != offset)     break;
-            offset++;
-        }
-
-        return offset;
-    }
-
-    /// Return vector of indices correlating to the group attribute arrays
-    std::vector<size_t> populateGroupIndices() const
-    {
-        std::vector<size_t> indices;
-
-        const Descriptor::NameToPosMap& map = mAttributeSet.descriptor().map();
-
-        for (const auto& namePos : map) {
-            const AttributeArray* array = mAttributeSet.getConst(namePos.first);
-            if (isGroup(*array)) {
-                indices.push_back(namePos.second);
-            }
-        }
-
-        return indices;
-    }
-
-    /// Determine if a move is required to efficiently compact the data and store the
-    /// source name, offset and the target offset in the input parameters
-    bool requiresMove(Name& sourceName, size_t& sourceOffset, size_t& targetOffset) const {
-
-        targetOffset = this->nextUnusedOffset();
-
-        const Descriptor::NameToPosMap& groupMap = mAttributeSet.descriptor().groupMap();
-
-        for (const auto& namePos : groupMap) {
-
-            // move only required if source comes after the target
-
-            if (namePos.second >= targetOffset) {
-                sourceName = namePos.first;
-                sourceOffset = namePos.second;
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-private:
-    const AttributeSet& mAttributeSet;
-}; // class GroupInfo
-
-
 } // namespace point_group_internal
 
 
@@ -452,15 +313,9 @@ inline void deleteMissingPointGroups(   std::vector<std::string>& groups,
 ////////////////////////////////////////
 
 
-template <typename PointDataTree>
-inline void appendGroup(PointDataTree& tree, const Name& group)
+template <typename PointDataTreeT>
+inline void appendGroup(PointDataTreeT& tree, const Name& group)
 {
-    using Descriptor = AttributeSet::Descriptor;
-    using LeafManagerT = typename tree::template LeafManager<PointDataTree>;
-
-    using point_attribute_internal::AppendAttributeOp;
-    using point_group_internal::GroupInfo;
-
     if (group.empty()) {
         OPENVDB_THROW(KeyError, "Cannot use an empty group name as a key.");
     }
@@ -470,14 +325,13 @@ inline void appendGroup(PointDataTree& tree, const Name& group)
     if (!iter)  return;
 
     const AttributeSet& attributeSet = iter->attributeSet();
-    Descriptor::Ptr descriptor = attributeSet.descriptorPtr();
-    GroupInfo groupInfo(attributeSet);
+    auto descriptor = attributeSet.descriptorPtr();
 
     // don't add if group already exists
 
     if (descriptor->hasGroup(group))    return;
 
-    const bool hasUnusedGroup = groupInfo.unusedGroups() > 0;
+    const bool hasUnusedGroup = descriptor->unusedGroups() > 0;
 
     // add a new group attribute if there are no unused groups
 
@@ -488,14 +342,17 @@ inline void appendGroup(PointDataTree& tree, const Name& group)
         const Name groupName = descriptor->uniqueName("__group");
 
         descriptor = descriptor->duplicateAppend(groupName, GroupAttributeArray::attributeType());
-
         const size_t pos = descriptor->find(groupName);
 
         // insert new group attribute
 
-        AppendAttributeOp<PointDataTree> append(descriptor, pos);
-        LeafManagerT leafManager(tree);
-        tbb::parallel_for(leafManager.leafRange(), append);
+        tree::LeafManager<PointDataTreeT> leafManager(tree);
+        leafManager.foreach(
+            [&](typename PointDataTreeT::LeafNodeType& leaf, size_t /*idx*/) {
+                auto expected = leaf.attributeSet().descriptorPtr();
+                leaf.appendAttribute(*expected, descriptor, pos);
+            }, /*threaded=*/true
+        );
     }
     else {
         // make the descriptor unique before we modify the group map
@@ -506,11 +363,11 @@ inline void appendGroup(PointDataTree& tree, const Name& group)
 
     // ensure that there are now available groups
 
-    assert(groupInfo.unusedGroups() > 0);
+    assert(descriptor->unusedGroups() > 0);
 
     // find next unused offset
 
-    const size_t offset = groupInfo.nextUnusedOffset();
+    const size_t offset = descriptor->unusedGroupOffset();
 
     // add the group mapping to the descriptor
 
@@ -598,14 +455,11 @@ inline void dropGroups( PointDataTree& tree)
 {
     using Descriptor = AttributeSet::Descriptor;
 
-    using point_group_internal::GroupInfo;
-
     auto iter = tree.cbeginLeaf();
 
     if (!iter)  return;
 
     const AttributeSet& attributeSet = iter->attributeSet();
-    GroupInfo groupInfo(attributeSet);
 
     // make the descriptor unique before we modify the group map
 
@@ -616,7 +470,7 @@ inline void dropGroups( PointDataTree& tree)
 
     // find all indices for group attribute arrays
 
-    std::vector<size_t> indices = groupInfo.populateGroupIndices();
+    std::vector<size_t> indices = attributeSet.groupAttributeIndices();
 
     // drop these attributes arrays
 
@@ -635,18 +489,16 @@ inline void compactGroups(PointDataTree& tree)
     using LeafManagerT = typename tree::template LeafManager<PointDataTree>;
 
     using point_group_internal::CopyGroupOp;
-    using point_group_internal::GroupInfo;
 
     auto iter = tree.cbeginLeaf();
 
     if (!iter)  return;
 
     const AttributeSet& attributeSet = iter->attributeSet();
-    GroupInfo groupInfo(attributeSet);
 
     // early exit if not possible to compact
 
-    if (!groupInfo.canCompactGroups())    return;
+    if (!attributeSet.descriptor().canCompactGroups())    return;
 
     // make the descriptor unique before we modify the group map
 
@@ -660,7 +512,7 @@ inline void compactGroups(PointDataTree& tree)
     Name sourceName;
     size_t sourceOffset, targetOffset;
 
-    while (groupInfo.requiresMove(sourceName, sourceOffset, targetOffset)) {
+    while (descriptor->requiresGroupMove(sourceName, sourceOffset, targetOffset)) {
 
         const GroupIndex sourceIndex = attributeSet.groupIndex(sourceOffset);
         const GroupIndex targetIndex = attributeSet.groupIndex(targetOffset);
@@ -674,13 +526,14 @@ inline void compactGroups(PointDataTree& tree)
 
     // drop unused attribute arrays
 
-    std::vector<size_t> indices = groupInfo.populateGroupIndices();
+    const std::vector<size_t> indices = attributeSet.groupAttributeIndices();
 
-    const size_t totalAttributesToDrop = groupInfo.unusedGroups() / groupInfo.groupBits();
+    const size_t totalAttributesToDrop = descriptor->unusedGroups() / descriptor->groupBits();
 
     assert(totalAttributesToDrop <= indices.size());
 
-    std::vector<size_t> indicesToDrop(indices.end() - totalAttributesToDrop, indices.end());
+    const std::vector<size_t> indicesToDrop(indices.end() - totalAttributesToDrop,
+        indices.end());
 
     dropAttributes(tree, indicesToDrop);
 }
@@ -854,7 +707,7 @@ inline void setGroupByRandomPercentage( PointDataTree& tree,
     using RandomFilter =  RandomLeafFilter<PointDataTree, std::mt19937>;
 
     const int currentPoints = static_cast<int>(pointCount(tree));
-    const int targetPoints = int(math::Round((percentage * currentPoints)/100.0f));
+    const int targetPoints = int(math::Round((percentage * float(currentPoints))/100.0f));
 
     RandomFilter filter(tree, targetPoints, seed);
 
@@ -871,7 +724,3 @@ inline void setGroupByRandomPercentage( PointDataTree& tree,
 
 
 #endif // OPENVDB_POINTS_POINT_GROUP_HAS_BEEN_INCLUDED
-
-// Copyright (c) 2012-2018 DreamWorks Animation LLC
-// All rights reserved. This software is distributed under the
-// Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )

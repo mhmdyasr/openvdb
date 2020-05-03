@@ -1,32 +1,5 @@
-///////////////////////////////////////////////////////////////////////////
-//
-// Copyright (c) 2012-2018 DreamWorks Animation LLC
-//
-// All rights reserved. This software is distributed under the
-// Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )
-//
-// Redistributions of source code must retain the above copyright
-// and license notice and the following restrictions and disclaimer.
-//
-// *     Neither the name of DreamWorks Animation nor the names of
-// its contributors may be used to endorse or promote products derived
-// from this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-// IN NO EVENT SHALL THE COPYRIGHT HOLDERS' AND CONTRIBUTORS' AGGREGATE
-// LIABILITY FOR ALL CLAIMS REGARDLESS OF THEIR BASIS EXCEED US$250.00.
-//
-///////////////////////////////////////////////////////////////////////////
+// Copyright Contributors to the OpenVDB Project
+// SPDX-License-Identifier: MPL-2.0
 
 /// @file points/AttributeSet.h
 ///
@@ -55,6 +28,9 @@ namespace OPENVDB_VERSION_NAME {
 namespace points {
 
 
+using GroupType = uint8_t;
+
+
 ////////////////////////////////////////
 
 
@@ -66,6 +42,7 @@ public:
 
     using Ptr                   = std::shared_ptr<AttributeSet>;
     using ConstPtr              = std::shared_ptr<const AttributeSet>;
+    using UniquePtr             = std::unique_ptr<AttributeSet>;
 
     class Descriptor;
 
@@ -97,17 +74,21 @@ public:
     /// Construct a new AttributeSet from the given AttributeSet.
     /// @param attributeSet the old attribute set
     /// @param arrayLength the desired length of the arrays in the new AttributeSet
+    /// @param lock an optional scoped registry lock to avoid contention
     /// @note This constructor is typically used to resize an existing AttributeSet as
     ///       it transfers attribute metadata such as hidden and transient flags
-    AttributeSet(const AttributeSet& attributeSet, Index arrayLength);
+    AttributeSet(const AttributeSet& attributeSet, Index arrayLength,
+        const AttributeArray::ScopedRegistryLock* lock = nullptr);
 
     /// Construct a new AttributeSet from the given Descriptor.
     /// @param descriptor stored in the new AttributeSet and used in construction
     /// @param arrayLength the desired length of the arrays in the new AttributeSet
+    /// @param lock an optional scoped registry lock to avoid contention
     /// @note Descriptors do not store attribute metadata such as hidden and transient flags
     ///       which live on the AttributeArrays, so for constructing from an existing AttributeSet
     ///       use the AttributeSet(const AttributeSet&, Index) constructor instead
-    explicit AttributeSet(const DescriptorPtr& descriptor, Index arrayLength = 1);
+    AttributeSet(const DescriptorPtr& descriptor, Index arrayLength = 1,
+        const AttributeArray::ScopedRegistryLock* lock = nullptr);
 
     /// Shallow copy constructor, the descriptor and attribute arrays will be shared.
     AttributeSet(const AttributeSet&);
@@ -181,6 +162,9 @@ public:
     /// @note see offset description for groupOffset()
     Util::GroupIndex groupIndex(const size_t offset) const;
 
+    /// Return the indices of the attribute arrays which are group attribute arrays
+    std::vector<size_t> groupAttributeIndices() const;
+
     /// Return true if the attribute array stored at position @a pos is shared.
     bool isShared(size_t pos) const;
     /// @brief  If the attribute array stored at position @a pos is shared,
@@ -193,14 +177,62 @@ public:
                                         const NamePair& type,
                                         const Index strideOrTotalSize = 1,
                                         const bool constantStride = true,
-                                        Metadata::Ptr defaultValue = Metadata::Ptr());
+                                        const Metadata* defaultValue = nullptr);
+
+    OPENVDB_DEPRECATED
+    AttributeArray::Ptr appendAttribute(const Name& name,
+                                        const NamePair& type,
+                                        const Index strideOrTotalSize,
+                                        const bool constantStride,
+                                        Metadata::Ptr defaultValue);
 
     /// Append attribute @a attribute (descriptor-sharing)
     /// Requires current descriptor to match @a expected
     /// On append, current descriptor is replaced with @a replacement
+    /// Provide a @a lock object to avoid contention from appending in parallel
     AttributeArray::Ptr appendAttribute(const Descriptor& expected, DescriptorPtr& replacement,
                                         const size_t pos, const Index strideOrTotalSize = 1,
-                                        const bool constantStride = true);
+                                        const bool constantStride = true,
+                                        const Metadata* defaultValue = nullptr,
+                                        const AttributeArray::ScopedRegistryLock* lock = nullptr);
+
+    OPENVDB_DEPRECATED
+    AttributeArray::Ptr appendAttribute(const Descriptor& expected, DescriptorPtr& replacement,
+                                        const size_t pos, const Index strideOrTotalSize,
+                                        const bool constantStride,
+                                        const AttributeArray::ScopedRegistryLock* lock);
+
+    /// @brief Remove and return an attribute array by name
+    /// @param name the name of the attribute array to release
+    /// @details Detaches the attribute array from this attribute set and returns it, if
+    /// @a name is invalid, returns an empty shared pointer. This also updates the descriptor
+    /// to remove the reference to the attribute array.
+    /// @note AttributeArrays are stored as shared pointers, so they are not guaranteed
+    /// to be unique. Check the reference count before blindly re-using in a new AttributeSet.
+    AttributeArray::Ptr removeAttribute(const Name& name);
+
+    /// @brief Remove and return an attribute array by index
+    /// @param pos the position index of the attribute to release
+    /// @details Detaches the attribute array from this attribute set and returns it, if
+    /// @a pos is invalid, returns an empty shared pointer. This also updates the descriptor
+    /// to remove the reference to the attribute array.
+    /// @note AttributeArrays are stored as shared pointers, so they are not guaranteed
+    /// to be unique. Check the reference count before blindly re-using in a new AttributeSet.
+    AttributeArray::Ptr removeAttribute(const size_t pos);
+
+    /// @brief Remove and return an attribute array by index (unsafe method)
+    /// @param pos the position index of the attribute to release
+    /// @details Detaches the attribute array from this attribute set and returns it, if
+    /// @a pos is invalid, returns an empty shared pointer.
+    /// In cases where the AttributeSet is due to be destroyed, a small performance
+    /// advantage can be gained by leaving the attribute array as a nullptr and not
+    /// updating the descriptor. However, this leaves the AttributeSet in an invalid
+    /// state making it unsafe to call any methods that implicitly derefence the attribute array.
+    /// @note AttributeArrays are stored as shared pointers, so they are not guaranteed
+    /// to be unique. Check the reference count before blindly re-using in a new AttributeSet.
+    /// @warning Only use this method if you're an expert and know the risks of not
+    /// updating the array of attributes or the descriptor.
+    AttributeArray::Ptr removeAttributeUnsafe(const size_t pos);
 
     /// Drop attributes with @a pos indices (simple method)
     /// Creates a new descriptor for this attribute set
@@ -395,8 +427,12 @@ public:
 
     /// Return @c true if group exists
     bool hasGroup(const Name& group) const;
-    /// Define a group name to offset mapping
-    void setGroup(const Name& group, const size_t offset);
+    /// @brief Define a group name to offset mapping
+    /// @param group group name
+    /// @param offset group offset
+    /// @param checkValidOffset throws if offset out-of-range or in-use
+    void setGroup(const Name& group, const size_t offset,
+        const bool checkValidOffset = false);
     /// Drop any mapping keyed by group name
     void dropGroup(const Name& group);
     /// Clear all groups
@@ -422,6 +458,42 @@ public:
     /// Return the group index from the offset of the group
     /// @note see offset description for groupOffset()
     GroupIndex groupIndex(const size_t offset) const;
+
+    /// Return number of bits occupied by a group attribute array
+    static size_t groupBits() { return sizeof(GroupType) * CHAR_BIT; }
+
+    /// Return the total number of available groups
+    /// (group bits * number of group attributes)
+    size_t availableGroups() const;
+
+    /// Return the number of empty group slots which correlates to the number of groups
+    /// that can be stored without increasing the number of group attribute arrays
+    size_t unusedGroups() const;
+
+    /// Return @c true if there are sufficient empty slots to allow compacting
+    bool canCompactGroups() const;
+
+    /// @brief Return a group offset that is not in use
+    /// @param hint if provided, request a specific offset as a hint
+    /// @return index of an offset or size_t max if no available group offsets
+    size_t unusedGroupOffset(size_t hint = std::numeric_limits<size_t>::max()) const;
+
+    OPENVDB_DEPRECATED
+    size_t nextUnusedGroupOffset() const;
+
+    /// @brief Determine if a move is required to efficiently compact the data and store the
+    /// source name, offset and the target offset in the input parameters
+    /// @param sourceName source name
+    /// @param sourceOffset source offset
+    /// @param targetOffset target offset
+    /// @return @c true if move is required to compact the data
+    bool requiresGroupMove(Name& sourceName, size_t& sourceOffset, size_t& targetOffset) const;
+
+    /// @brief Test if there are any group names shared by both descriptors which
+    /// have a different index
+    /// @param rhs the descriptor to compare with
+    /// @return @c true if an index collision exists
+    bool groupIndexCollision(const Descriptor& rhs) const;
 
     /// Return a unique name for an attribute array based on given name
     const Name uniqueName(const Name& name) const;
@@ -484,7 +556,3 @@ private:
 } // namespace openvdb
 
 #endif // OPENVDB_POINTS_ATTRIBUTE_ARRAY_HAS_BEEN_INCLUDED
-
-// Copyright (c) 2012-2018 DreamWorks Animation LLC
-// All rights reserved. This software is distributed under the
-// Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )

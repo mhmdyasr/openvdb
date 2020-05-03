@@ -1,32 +1,5 @@
-///////////////////////////////////////////////////////////////////////////
-//
-// Copyright (c) 2012-2019 DreamWorks Animation LLC
-//
-// All rights reserved. This software is distributed under the
-// Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )
-//
-// Redistributions of source code must retain the above copyright
-// and license notice and the following restrictions and disclaimer.
-//
-// *     Neither the name of DreamWorks Animation nor the names of
-// its contributors may be used to endorse or promote products derived
-// from this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-// IN NO EVENT SHALL THE COPYRIGHT HOLDERS' AND CONTRIBUTORS' AGGREGATE
-// LIABILITY FOR ALL CLAIMS REGARDLESS OF THEIR BASIS EXCEED US$250.00.
-//
-///////////////////////////////////////////////////////////////////////////
+// Copyright Contributors to the OpenVDB Project
+// SPDX-License-Identifier: MPL-2.0
 
 #include <openvdb/Exceptions.h>
 #include <openvdb/openvdb.h>
@@ -38,6 +11,7 @@
 #include <openvdb/util/CpuTimer.h>
 #include <cppunit/extensions/HelperMacros.h>
 #include <iostream>
+#include <memory> // for std::make_unique
 
 #define ASSERT_DOUBLES_EXACTLY_EQUAL(expected, actual) \
     CPPUNIT_ASSERT_DOUBLES_EQUAL((expected), (actual), /*tolerance=*/0.0);
@@ -50,6 +24,7 @@ public:
     CPPUNIT_TEST(testConstPtr);
     CPPUNIT_TEST(testGetGrid);
     CPPUNIT_TEST(testIsType);
+    CPPUNIT_TEST(testIsTreeUnique);
     CPPUNIT_TEST(testTransform);
     CPPUNIT_TEST(testCopyGrid);
     CPPUNIT_TEST(testValueConversion);
@@ -61,6 +36,7 @@ public:
     void testConstPtr();
     void testGetGrid();
     void testIsType();
+    void testIsTreeUnique();
     void testTransform();
     void testCopyGrid();
     void testValueConversion();
@@ -108,11 +84,9 @@ public:
     void readTopology(std::istream& is, bool = false) override { is.seekg(0, std::ios::beg); }
     void writeTopology(std::ostream& os, bool = false) const override { os.seekp(0); }
 
-#if OPENVDB_ABI_VERSION_NUMBER >= 3
     void readBuffers(std::istream& is,
         const openvdb::CoordBBox&, bool /*saveFloatAsHalf*/=false) override { is.seekg(0); }
     void readNonresidentBuffers() const override {}
-#endif
     void readBuffers(std::istream& is, bool /*saveFloatAsHalf*/=false) override { is.seekg(0); }
     void writeBuffers(std::ostream& os, bool /*saveFloatAsHalf*/=false) const override
         { os.seekp(0, std::ios::beg); }
@@ -121,9 +95,7 @@ public:
     void clear() {}
     void prune(const ValueType& = 0) {}
     void clip(const openvdb::CoordBBox&) {}
-#if OPENVDB_ABI_VERSION_NUMBER >= 3
     void clipUnallocatedNodes() override {}
-#endif
 #if OPENVDB_ABI_VERSION_NUMBER >= 4
     openvdb::Index32 unallocatedLeafCount() const override { return 0; }
 #endif
@@ -140,14 +112,16 @@ public:
 
     openvdb::Index treeDepth() const override { return 0; }
     openvdb::Index leafCount() const override { return 0; }
+#if OPENVDB_ABI_VERSION_NUMBER >= 7
+    std::vector<openvdb::Index32> nodeCount() const override
+        { return std::vector<openvdb::Index32>(DEPTH, 0); }
+#endif
     openvdb::Index nonLeafCount() const override { return 0; }
     openvdb::Index64 activeVoxelCount() const override { return 0UL; }
     openvdb::Index64 inactiveVoxelCount() const override { return 0UL; }
     openvdb::Index64 activeLeafVoxelCount() const override { return 0UL; }
     openvdb::Index64 inactiveLeafVoxelCount() const override { return 0UL; }
-#if OPENVDB_ABI_VERSION_NUMBER >= 3
     openvdb::Index64 activeTileCount() const override { return 0UL; }
-#endif
 };
 
 const openvdb::Index ProxyTree::DEPTH = 0;
@@ -224,6 +198,29 @@ TestGrid::testIsType()
 
 
 void
+TestGrid::testIsTreeUnique()
+{
+    using namespace openvdb;
+
+    FloatGrid::Ptr grid = FloatGrid::create();
+    CPPUNIT_ASSERT(grid->isTreeUnique());
+
+    // a shallow copy shares the same tree
+    FloatGrid::Ptr grid2 = grid->copy();
+    CPPUNIT_ASSERT(!grid->isTreeUnique());
+    CPPUNIT_ASSERT(!grid2->isTreeUnique());
+
+    // cleanup the shallow copy
+    grid2.reset();
+    CPPUNIT_ASSERT(grid->isTreeUnique());
+
+    // copy with new tree
+    GridBase::Ptr grid3 = grid->copyGridWithNewTree();
+    CPPUNIT_ASSERT(grid->isTreeUnique());
+}
+
+
+void
 TestGrid::testTransform()
 {
     ProxyGrid grid;
@@ -293,6 +290,27 @@ TestGrid::testCopyGrid()
     // query changed value and make sure it's different between trees
     ASSERT_DOUBLES_EXACTLY_EQUAL(fillValue1, tree1.getValue(changeCoord));
     ASSERT_DOUBLES_EXACTLY_EQUAL(1.0f, tree2.getValue(changeCoord));
+
+#if OPENVDB_ABI_VERSION_NUMBER >= 7
+    // shallow-copy a const grid but supply a new transform and meta map
+    CPPUNIT_ASSERT_EQUAL(1.0, grid1->transform().voxelSize().x());
+    CPPUNIT_ASSERT_EQUAL(size_t(0), grid1->metaCount());
+    CPPUNIT_ASSERT_EQUAL(Index(2), grid1->tree().leafCount());
+
+    math::Transform::Ptr xform(math::Transform::createLinearTransform(/*voxelSize=*/0.25));
+    MetaMap meta;
+    meta.insertMeta("test", Int32Metadata(4));
+
+    FloatGrid::ConstPtr constGrid1 = ConstPtrCast<const FloatGrid>(grid1);
+
+    GridBase::ConstPtr grid3 = constGrid1->copyGridReplacingMetadataAndTransform(meta, xform);
+    const FloatTree& tree3 = gridConstPtrCast<FloatGrid>(grid3)->tree();
+
+    CPPUNIT_ASSERT_EQUAL(0.25, grid3->transform().voxelSize().x());
+    CPPUNIT_ASSERT_EQUAL(size_t(1), grid3->metaCount());
+    CPPUNIT_ASSERT_EQUAL(Index(2), tree3.leafCount());
+    CPPUNIT_ASSERT_EQUAL(long(3), constGrid1->constTreePtr().use_count());
+#endif
 }
 
 
@@ -406,33 +424,21 @@ TestGrid::testClipping()
         const float fg = 5.f;
         FloatGrid cube(0.f);
         cube.fill(CoordBBox(Coord(-10), Coord(10)), /*value=*/fg, /*active=*/true);
-#if OPENVDB_ABI_VERSION_NUMBER <= 2
-        cube.tree().clip(cube.constTransform().worldToIndexNodeCentered(clipBox));
-#else
         cube.clipGrid(clipBox);
-#endif
         validateClippedGrid(cube, fg);
     }
     {
         const bool fg = true;
         BoolGrid cube(false);
         cube.fill(CoordBBox(Coord(-10), Coord(10)), /*value=*/fg, /*active=*/true);
-#if OPENVDB_ABI_VERSION_NUMBER <= 2
-        cube.tree().clip(cube.constTransform().worldToIndexNodeCentered(clipBox));
-#else
         cube.clipGrid(clipBox);
-#endif
         validateClippedGrid(cube, fg);
     }
     {
         const Vec3s fg(1.f, -2.f, 3.f);
         Vec3SGrid cube(Vec3s(0.f));
         cube.fill(CoordBBox(Coord(-10), Coord(10)), /*value=*/fg, /*active=*/true);
-#if OPENVDB_ABI_VERSION_NUMBER <= 2
-        cube.tree().clip(cube.constTransform().worldToIndexNodeCentered(clipBox));
-#else
         cube.clipGrid(clipBox);
-#endif
         validateClippedGrid(cube, fg);
     }
     /*
@@ -524,8 +530,19 @@ TestGrid::testApply()
         CPPUNIT_ASSERT(floatCGrid->apply<AllowedGridTypes>(op));  CPPUNIT_ASSERT(op.isConst);
         CPPUNIT_ASSERT(doubleCGrid->apply<AllowedGridTypes>(op)); CPPUNIT_ASSERT(op.isConst);
     }
-}
+    {
+        using AllowedGridTypes = TypeList<FloatGrid, DoubleGrid>;
 
-// Copyright (c) 2012-2019 DreamWorks Animation LLC
-// All rights reserved. This software is distributed under the
-// Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )
+        // Verify that rvalue functors are supported.
+        int n = 0;
+        CPPUNIT_ASSERT(  !boolGrid->apply<AllowedGridTypes>([&n](GridBase&) { ++n; }));
+        CPPUNIT_ASSERT(   !intGrid->apply<AllowedGridTypes>([&n](GridBase&) { ++n; }));
+        CPPUNIT_ASSERT(  floatGrid->apply<AllowedGridTypes>([&n](GridBase&) { ++n; }));
+        CPPUNIT_ASSERT( doubleGrid->apply<AllowedGridTypes>([&n](GridBase&) { ++n; }));
+        CPPUNIT_ASSERT( !boolCGrid->apply<AllowedGridTypes>([&n](const GridBase&) { ++n; }));
+        CPPUNIT_ASSERT(  !intCGrid->apply<AllowedGridTypes>([&n](const GridBase&) { ++n; }));
+        CPPUNIT_ASSERT( floatCGrid->apply<AllowedGridTypes>([&n](const GridBase&) { ++n; }));
+        CPPUNIT_ASSERT(doubleCGrid->apply<AllowedGridTypes>([&n](const GridBase&) { ++n; }));
+        CPPUNIT_ASSERT_EQUAL(4, n);
+    }
+}

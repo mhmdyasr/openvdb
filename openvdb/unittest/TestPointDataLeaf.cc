@@ -1,32 +1,5 @@
-///////////////////////////////////////////////////////////////////////////
-//
-// Copyright (c) 2012-2018 DreamWorks Animation LLC
-//
-// All rights reserved. This software is distributed under the
-// Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )
-//
-// Redistributions of source code must retain the above copyright
-// and license notice and the following restrictions and disclaimer.
-//
-// *     Neither the name of DreamWorks Animation nor the names of
-// its contributors may be used to endorse or promote products derived
-// from this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-// IN NO EVENT SHALL THE COPYRIGHT HOLDERS' AND CONTRIBUTORS' AGGREGATE
-// LIABILITY FOR ALL CLAIMS REGARDLESS OF THEIR BASIS EXCEED US$250.00.
-//
-///////////////////////////////////////////////////////////////////////////
+// Copyright Contributors to the OpenVDB Project
+// SPDX-License-Identifier: MPL-2.0
 
 #include <cppunit/extensions/HelperMacros.h>
 
@@ -58,6 +31,7 @@ public:
     CPPUNIT_TEST(testSetValue);
     CPPUNIT_TEST(testMonotonicity);
     CPPUNIT_TEST(testAttributes);
+    CPPUNIT_TEST(testSteal);
     CPPUNIT_TEST(testTopologyCopy);
     CPPUNIT_TEST(testEquivalence);
     CPPUNIT_TEST(testIterators);
@@ -73,6 +47,7 @@ public:
     void testSetValue();
     void testMonotonicity();
     void testAttributes();
+    void testSteal();
     void testTopologyCopy();
     void testEquivalence();
     void testIterators();
@@ -522,8 +497,19 @@ TestPointDataLeaf::testAttributes()
 
     leaf.initializeAttributes(descrA, /*arrayLength=*/100);
 
+    TypedMetadata<int> defaultValue(7);
+    Metadata& baseDefaultValue = defaultValue;
+
     descrA = descrA->duplicateAppend("id", AttributeI::attributeType());
-    leaf.appendAttribute(leaf.attributeSet().descriptor(), descrA, descrA->find("id"));
+    leaf.appendAttribute(leaf.attributeSet().descriptor(), descrA, descrA->find("id"),
+        Index(1), true, &baseDefaultValue);
+
+    // note that the default value has not been added to the replacement descriptor,
+    // however the default value of the attribute is as expected
+    CPPUNIT_ASSERT_EQUAL(0,
+        leaf.attributeSet().descriptor().getDefaultValue<int>("id"));
+    CPPUNIT_ASSERT_EQUAL(7,
+        AttributeI::cast(*leaf.attributeSet().getConst("id")).get(0));
 
     CPPUNIT_ASSERT_EQUAL(leaf.attributeSet().size(), size_t(2));
 
@@ -647,6 +633,39 @@ TestPointDataLeaf::testAttributes()
     const Index64 memUsage = baseLeaf.memUsage() + leaf.attributeSet().memUsage();
 
     CPPUNIT_ASSERT_EQUAL(memUsage, leaf.memUsage());
+}
+
+
+void
+TestPointDataLeaf::testSteal()
+{
+    using AttributeVec3s = TypedAttributeArray<Vec3s>;
+    using Descriptor = AttributeSet::Descriptor;
+
+    // create a descriptor
+
+    Descriptor::Ptr descrA = Descriptor::create(AttributeVec3s::attributeType());
+
+    // create a leaf and initialize attributes using this descriptor
+
+    LeafType leaf(openvdb::Coord(0, 0, 0));
+
+    CPPUNIT_ASSERT_EQUAL(leaf.attributeSet().size(), size_t(0));
+
+    leaf.initializeAttributes(descrA, /*arrayLength=*/100);
+
+    CPPUNIT_ASSERT_EQUAL(leaf.attributeSet().size(), size_t(1));
+
+    // steal the attribute set
+
+    AttributeSet::UniquePtr attributeSet = leaf.stealAttributeSet();
+
+    CPPUNIT_ASSERT(attributeSet);
+    CPPUNIT_ASSERT_EQUAL(attributeSet->size(), size_t(1));
+
+    // ensure a new attribute set has been inserted in it's place
+
+    CPPUNIT_ASSERT_EQUAL(leaf.attributeSet().size(), size_t(0));
 }
 
 
@@ -1193,7 +1212,6 @@ TestPointDataLeaf::testIO()
             CPPUNIT_ASSERT(leaf == *leafFromDisk);
         }
 
-#if OPENVDB_ABI_VERSION_NUMBER >= 3
         { // read grids from file and pre-fetch
             PointDataGrid::Ptr gridFromDisk;
 
@@ -1294,7 +1312,6 @@ TestPointDataLeaf::testIO()
             CPPUNIT_ASSERT(!position3.isOutOfCore());
             CPPUNIT_ASSERT(!density3.isOutOfCore());
         }
-#endif // OPENVDB_ABI_VERSION_NUMBER >= 3
 
         remove("leaf.vdb");
     }
@@ -1577,7 +1594,3 @@ TestPointDataLeaf::testCopyDescriptor()
 
 
 CPPUNIT_TEST_SUITE_REGISTRATION(TestPointDataLeaf);
-
-// Copyright (c) 2012-2018 DreamWorks Animation LLC
-// All rights reserved. This software is distributed under the
-// Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )

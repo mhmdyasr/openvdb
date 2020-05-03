@@ -1,32 +1,5 @@
-///////////////////////////////////////////////////////////////////////////
-//
-// Copyright (c) 2012-2018 DreamWorks Animation LLC
-//
-// All rights reserved. This software is distributed under the
-// Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )
-//
-// Redistributions of source code must retain the above copyright
-// and license notice and the following restrictions and disclaimer.
-//
-// *     Neither the name of DreamWorks Animation nor the names of
-// its contributors may be used to endorse or promote products derived
-// from this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-// IN NO EVENT SHALL THE COPYRIGHT HOLDERS' AND CONTRIBUTORS' AGGREGATE
-// LIABILITY FOR ALL CLAIMS REGARDLESS OF THEIR BASIS EXCEED US$250.00.
-//
-///////////////////////////////////////////////////////////////////////////
+// Copyright Contributors to the OpenVDB Project
+// SPDX-License-Identifier: MPL-2.0
 
 /// @author Dan Bailey
 ///
@@ -336,22 +309,25 @@ public:
         : BaseLeaf(other, zeroVal<T>(), zeroVal<T>(), TopologyCopy())
         , mAttributeSet(new AttributeSet) { }
 
-#if OPENVDB_ABI_VERSION_NUMBER >= 3
     PointDataLeafNode(PartialCreate, const Coord& coords,
         const T& value = zeroVal<T>(), bool active = false)
         : BaseLeaf(PartialCreate(), coords, value, active)
         , mAttributeSet(new AttributeSet) { assertNonModifiableUnlessZero(value); }
-#endif
 
 public:
 
     /// Retrieve the attribute set.
     const AttributeSet& attributeSet() const { return *mAttributeSet; }
 
+    /// @brief Steal the attribute set, a new, empty attribute set is inserted in it's place.
+    AttributeSet::UniquePtr stealAttributeSet();
+
     /// @brief Create a new attribute set. Existing attributes will be removed.
-    void initializeAttributes(const Descriptor::Ptr& descriptor, const Index arrayLength);
+    void initializeAttributes(const Descriptor::Ptr& descriptor, const Index arrayLength,
+        const AttributeArray::ScopedRegistryLock* lock = nullptr);
     /// @brief Clear the attribute set.
-    void clearAttributes(const bool updateValueMask = true);
+    void clearAttributes(const bool updateValueMask = true,
+        const AttributeArray::ScopedRegistryLock* lock = nullptr);
 
     /// @brief Returns @c true if an attribute with this index exists.
     /// @param pos Index of the attribute
@@ -366,9 +342,19 @@ public:
     /// @param pos Index of the new attribute in the descriptor replacement.
     /// @param strideOrTotalSize Stride of the attribute array (if constantStride), total size otherwise
     /// @param constantStride if @c false, stride is interpreted as total size of the array
+    /// @param metadata optional default value metadata
+    /// @param lock an optional scoped registry lock to avoid contention
     AttributeArray::Ptr appendAttribute(const Descriptor& expected, Descriptor::Ptr& replacement,
                                         const size_t pos, const Index strideOrTotalSize = 1,
-                                        const bool constantStride = true);
+                                        const bool constantStride = true,
+                                        const Metadata* metadata = nullptr,
+                                        const AttributeArray::ScopedRegistryLock* lock = nullptr);
+
+    OPENVDB_DEPRECATED
+    AttributeArray::Ptr appendAttribute(const Descriptor& expected, Descriptor::Ptr& replacement,
+                                        const size_t pos, const Index strideOrTotalSize,
+                                        const bool constantStride,
+                                        const AttributeArray::ScopedRegistryLock* lock);
 
     /// @brief Drop list of attributes.
     /// @param pos vector of attribute indices to drop
@@ -615,7 +601,7 @@ public:
     using ValueAll  = typename BaseLeaf::ValueAll;
 
 private:
-    std::unique_ptr<AttributeSet> mAttributeSet;
+    AttributeSet::UniquePtr mAttributeSet;
     uint16_t mVoxelBufferSize = 0;
 
 protected:
@@ -641,32 +627,6 @@ public:
 
 public:
 
-#if defined(_MSC_VER) && (_MSC_VER < 1914)
-    using ValueOnIter = typename BaseLeaf::ValueIter<
-        MaskOnIterator, PointDataLeafNode, const ValueType, ValueOn>;
-    using ValueOnCIter = typename BaseLeaf::ValueIter<
-        MaskOnIterator, const PointDataLeafNode, const ValueType, ValueOn>;
-    using ValueOffIter = typename BaseLeaf::ValueIter<
-        MaskOffIterator, PointDataLeafNode, const ValueType, ValueOff>;
-    using ValueOffCIter = typename BaseLeaf::ValueIter<
-        MaskOffIterator,const PointDataLeafNode,const ValueType,ValueOff>;
-    using ValueAllIter = typename BaseLeaf::ValueIter<
-        MaskDenseIterator, PointDataLeafNode, const ValueType, ValueAll>;
-    using ValueAllCIter = typename BaseLeaf::ValueIter<
-        MaskDenseIterator,const PointDataLeafNode,const ValueType,ValueAll>;
-    using ChildOnIter = typename BaseLeaf::ChildIter<
-        MaskOnIterator, PointDataLeafNode, ChildOn>;
-    using ChildOnCIter = typename BaseLeaf::ChildIter<
-        MaskOnIterator, const PointDataLeafNode, ChildOn>;
-    using ChildOffIter = typename BaseLeaf::ChildIter<
-        MaskOffIterator, PointDataLeafNode, ChildOff>;
-    using ChildOffCIter = typename BaseLeaf::ChildIter<
-        MaskOffIterator, const PointDataLeafNode, ChildOff>;
-    using ChildAllIter = typename BaseLeaf::DenseIter<
-        PointDataLeafNode, ValueType, ChildAll>;
-    using ChildAllCIter = typename BaseLeaf::DenseIter<
-        const PointDataLeafNode, const ValueType, ChildAll>;
-#else
     using ValueOnIter = typename BaseLeaf::template ValueIter<
         MaskOnIterator, PointDataLeafNode, const ValueType, ValueOn>;
     using ValueOnCIter = typename BaseLeaf::template ValueIter<
@@ -691,7 +651,6 @@ public:
         PointDataLeafNode, ValueType, ChildAll>;
     using ChildAllCIter = typename BaseLeaf::template DenseIter<
         const PointDataLeafNode, const ValueType, ChildAll>;
-#endif
 
     using IndexVoxelIter    = IndexIter<ValueVoxelCIter, NullFilter>;
     using IndexAllIter      = IndexIter<ValueAllCIter, NullFilter>;
@@ -790,8 +749,18 @@ public:
 // PointDataLeafNode implementation
 
 template<typename T, Index Log2Dim>
+inline AttributeSet::UniquePtr
+PointDataLeafNode<T, Log2Dim>::stealAttributeSet()
+{
+    AttributeSet::UniquePtr ptr = std::make_unique<AttributeSet>();
+    std::swap(ptr, mAttributeSet);
+    return ptr;
+}
+
+template<typename T, Index Log2Dim>
 inline void
-PointDataLeafNode<T, Log2Dim>::initializeAttributes(const Descriptor::Ptr& descriptor, const Index arrayLength)
+PointDataLeafNode<T, Log2Dim>::initializeAttributes(const Descriptor::Ptr& descriptor, const Index arrayLength,
+    const AttributeArray::ScopedRegistryLock* lock)
 {
     if (descriptor->size() != 1 ||
         descriptor->find("P") == AttributeSet::INVALID_POS ||
@@ -800,14 +769,15 @@ PointDataLeafNode<T, Log2Dim>::initializeAttributes(const Descriptor::Ptr& descr
         OPENVDB_THROW(IndexError, "Initializing attributes only allowed with one Vec3f position attribute.");
     }
 
-    mAttributeSet.reset(new AttributeSet(descriptor, arrayLength));
+    mAttributeSet.reset(new AttributeSet(descriptor, arrayLength, lock));
 }
 
 template<typename T, Index Log2Dim>
 inline void
-PointDataLeafNode<T, Log2Dim>::clearAttributes(const bool updateValueMask)
+PointDataLeafNode<T, Log2Dim>::clearAttributes(const bool updateValueMask,
+    const AttributeArray::ScopedRegistryLock* lock)
 {
-    mAttributeSet.reset(new AttributeSet(*mAttributeSet, 0));
+    mAttributeSet.reset(new AttributeSet(*mAttributeSet, 0, lock));
 
     // zero voxel values
 
@@ -837,9 +807,24 @@ template<typename T, Index Log2Dim>
 inline AttributeArray::Ptr
 PointDataLeafNode<T, Log2Dim>::appendAttribute( const Descriptor& expected, Descriptor::Ptr& replacement,
                                                 const size_t pos, const Index strideOrTotalSize,
-                                                const bool constantStride)
+                                                const bool constantStride,
+                                                const Metadata* metadata,
+                                                const AttributeArray::ScopedRegistryLock* lock)
 {
-    return mAttributeSet->appendAttribute(expected, replacement, pos, strideOrTotalSize, constantStride);
+    return mAttributeSet->appendAttribute(
+        expected, replacement, pos, strideOrTotalSize, constantStride, metadata, lock);
+}
+
+// deprecated
+template<typename T, Index Log2Dim>
+inline AttributeArray::Ptr
+PointDataLeafNode<T, Log2Dim>::appendAttribute( const Descriptor& expected, Descriptor::Ptr& replacement,
+                                                const size_t pos, const Index strideOrTotalSize,
+                                                const bool constantStride,
+                                                const AttributeArray::ScopedRegistryLock* lock)
+{
+    return this->appendAttribute(expected, replacement, pos,
+        strideOrTotalSize, constantStride, nullptr, lock);
 }
 
 template<typename T, Index Log2Dim>
@@ -1569,9 +1554,7 @@ template<typename T, Index Log2Dim>
 inline void
 PointDataLeafNode<T, Log2Dim>::fill(const CoordBBox& bbox, const ValueType& value, bool active)
 {
-#if OPENVDB_ABI_VERSION_NUMBER >= 3
     if (!this->allocate()) return;
-#endif
 
     this->assertNonModifiableUnlessZero(value);
 
@@ -1757,7 +1740,3 @@ struct SameLeafConfig<Dim1, points::PointDataLeafNode<T2, Dim1>> { static const 
 } // namespace openvdb
 
 #endif // OPENVDB_POINTS_POINT_DATA_GRID_HAS_BEEN_INCLUDED
-
-// Copyright (c) 2012-2018 DreamWorks Animation LLC
-// All rights reserved. This software is distributed under the
-// Mozilla Public License 2.0 ( http://www.mozilla.org/MPL/2.0/ )
